@@ -1,0 +1,5 @@
+{
+  "name": "Voice Transcriber Pro",
+  "description": "Record and transcribe long voice recordings in any language using Gemini AI.",
+  "requestFramePermissions": ["microphone"]
+}
