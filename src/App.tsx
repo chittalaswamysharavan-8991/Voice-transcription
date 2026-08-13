@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   Mic, 
   Square, 
@@ -22,13 +22,11 @@ import {
   Clock
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { GoogleGenAI } from "@google/genai";
 import Markdown from 'react-markdown';
 import { format } from 'date-fns';
 import { cn } from './lib/utils';
+import { clearAiAccessToken, requestChat, requestTranscription } from './lib/api';
 import { Recording, Message } from './types';
-
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
 
 export default function App() {
   const [recordings, setRecordings] = useState<Recording[]>([]);
@@ -45,7 +43,6 @@ export default function App() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const timerRef = useRef<number | null>(null);
   const chunksRef = useRef<Blob[]>([]);
-  const chatRef = useRef<any>(null);
   const recordingTimeRef = useRef(0);
 
   const selectedRecording = recordings.find(r => r.id === selectedRecordingId);
@@ -147,32 +144,7 @@ export default function App() {
     ));
 
     try {
-      const reader = new FileReader();
-      reader.readAsDataURL(recording.blob);
-      
-      const base64Data = await new Promise<string>((resolve) => {
-        reader.onloadend = () => {
-          const base64 = (reader.result as string).split(',')[1];
-          resolve(base64);
-        };
-      });
-
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: [
-          {
-            parts: [
-              { text: "Transcribe this audio accurately in its original language. If there are multiple speakers, try to distinguish them. Provide only the transcription text." },
-              { inlineData: { data: base64Data, mimeType: "audio/webm" } }
-            ]
-          }
-        ],
-        config: {
-          systemInstruction: "You are a professional transcriber. Your goal is to provide a verbatim transcription of the provided audio. Do not summarize or add commentary."
-        }
-      });
-
-      const transcription = response.text || "Transcription failed.";
+      const transcription = await requestTranscription(recording.blob);
       
       setRecordings(prev => prev.map(r => 
         r.id === recording.id ? { ...r, transcription, isTranscribing: false } : r
@@ -182,7 +154,7 @@ export default function App() {
       setRecordings(prev => prev.map(r => 
         r.id === recording.id ? { ...r, isTranscribing: false } : r
       ));
-      alert("Transcription failed. The file might be too large or there was an API error.");
+      alert(err instanceof Error ? err.message : 'Transcription failed.');
     }
   };
 
@@ -195,28 +167,17 @@ export default function App() {
     setIsChatLoading(true);
 
     try {
-      if (!chatRef.current) {
-        chatRef.current = ai.chats.create({
-          model: "gemini-3.1-pro-preview",
-          config: {
-            systemInstruction: "You are a helpful assistant for a voice transcription app. You can help users analyze their transcriptions, summarize them, or answer questions about the recorded content. Be concise and professional."
-          }
-        });
-      }
-
-      // Include transcription context if a recording is selected, but only on the first message
-      // to avoid repeating the context and wasting tokens.
-      let messageText = userInput;
-      if (selectedRecording?.transcription && chatMessages.length === 0) {
-        messageText = `Context from current transcription: "${selectedRecording.transcription}"\n\nUser Question: ${userInput}`;
-      }
-
-      const response = await chatRef.current.sendMessage({ message: messageText });
-      const modelMessage: Message = { role: 'model', text: response.text || "I'm sorry, I couldn't process that." };
+      const responseText = await requestChat({
+        message: userInput,
+        history: chatMessages.slice(-12),
+        transcription: selectedRecording?.transcription,
+      });
+      const modelMessage: Message = { role: 'model', text: responseText };
       setChatMessages(prev => [...prev, modelMessage]);
     } catch (err) {
       console.error("Chat error:", err);
-      setChatMessages(prev => [...prev, { role: 'model', text: "Error connecting to AI. Please try again." }]);
+      const errorText = err instanceof Error ? err.message : 'Error connecting to AI.';
+      setChatMessages(prev => [...prev, { role: 'model', text: errorText }]);
     } finally {
       setIsChatLoading(false);
     }
@@ -280,10 +241,17 @@ export default function App() {
         </nav>
 
         <div className="p-4 border-t border-[#E5E7EB]">
-          <div className="flex items-center gap-3 px-4 py-3 text-gray-500">
+          <button
+            type="button"
+            onClick={() => {
+              clearAiAccessToken();
+              alert('Saved AI access token cleared for this session.');
+            }}
+            className="w-full flex items-center gap-3 px-4 py-3 text-gray-500 hover:bg-gray-50 rounded-xl"
+          >
             <Settings className="w-5 h-5" />
-            Settings
-          </div>
+            Reset AI access
+          </button>
         </div>
       </motion.aside>
 
