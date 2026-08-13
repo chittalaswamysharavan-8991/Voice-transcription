@@ -25,7 +25,10 @@ export function validateTranscriptionPayload(payload) {
   if (audioBase64.length > MAX_AUDIO_BASE64_CHARS) {
     return failure('Audio exceeds the inline upload limit.', 413);
   }
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(audioBase64)) {
+  if (
+    audioBase64.length % 4 !== 0
+    || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(audioBase64)
+  ) {
     return failure('Audio data must be valid base64.');
   }
   if (!ALLOWED_AUDIO_TYPES.has(mimeType)) {

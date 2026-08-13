@@ -46,6 +46,15 @@ test('browser bundle has no Gemini SDK or server API key injection', async () =>
   assert.match(app, /requestChat/);
 });
 
+test('production dependency security floors stay enforced', async () => {
+  const packageJson = JSON.parse(await source('package.json'));
+
+  assert.match(packageJson.dependencies['@google/genai'], /^\^?2\./);
+  assert.equal(packageJson.overrides.protobufjs, '7.6.5');
+  assert.equal(packageJson.overrides.ws, '8.21.3');
+  assert.match(packageJson.scripts.check, /npm run audit:prod/);
+});
+
 test('AI endpoints exist behind a server-only access-token boundary', async () => {
   const [transcribe, chat, gemini] = await Promise.all([
     source('api/transcribe.js'),
@@ -91,6 +100,39 @@ test('server access token is enforced and private responses are not cached', asy
   }
 });
 
+test('server handlers execute method, authorization, and payload gates under Node', async () => {
+  const [{ default: transcribe }, { default: chat }] = await Promise.all([
+    import('../api/transcribe.js'),
+    import('../api/chat.js'),
+  ]);
+  const previous = process.env.VOICE_APP_ACCESS_TOKEN;
+
+  try {
+    process.env.VOICE_APP_ACCESS_TOKEN = 'handler-test-token';
+
+    const methodRejected = responseDouble();
+    await transcribe({ method: 'GET', headers: {} }, methodRejected);
+    assert.equal(methodRejected.statusCode, 405);
+    assert.equal(methodRejected.headers.Allow, 'POST');
+
+    const unauthorized = responseDouble();
+    await chat({ method: 'POST', headers: {}, body: {} }, unauthorized);
+    assert.equal(unauthorized.statusCode, 401);
+
+    const invalidPayload = responseDouble();
+    await transcribe({
+      method: 'POST',
+      headers: { 'x-voice-access-token': 'handler-test-token' },
+      body: {},
+    }, invalidPayload);
+    assert.equal(invalidPayload.statusCode, 400);
+    assert.match(invalidPayload.body.error, /audio data is required/i);
+  } finally {
+    if (previous === undefined) delete process.env.VOICE_APP_ACCESS_TOKEN;
+    else process.env.VOICE_APP_ACCESS_TOKEN = previous;
+  }
+});
+
 test('transcription payload validation rejects unsafe audio input', async () => {
   const validation = await loadValidationModule();
   assert.ok(validation, 'request validation module must exist');
@@ -100,6 +142,10 @@ test('transcription payload validation rejects unsafe audio input', async () => 
     { ok: true, value: { audioBase64: 'YWJj', mimeType: 'audio/webm' } },
   );
   assert.equal(validation.validateTranscriptionPayload({}).ok, false);
+  assert.equal(
+    validation.validateTranscriptionPayload({ audioBase64: 'A', mimeType: 'audio/webm' }).ok,
+    false,
+  );
   assert.equal(
     validation.validateTranscriptionPayload({ audioBase64: 'YWJj', mimeType: 'text/plain' }).ok,
     false,

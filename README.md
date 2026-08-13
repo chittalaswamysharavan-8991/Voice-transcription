@@ -52,4 +52,4 @@ Review current Gemini model availability before production deployment.
 npm run check
 ```
 
-This runs the security-boundary tests, TypeScript checks, and production build. GitHub Actions runs the same gate for pull requests and pushes to `main`.
+This runs the security-boundary tests, TypeScript checks, production build, and production-dependency vulnerability audit. GitHub Actions runs the same gate for pull requests and pushes to `main`.
